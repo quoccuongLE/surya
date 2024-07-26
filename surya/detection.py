@@ -1,3 +1,4 @@
+import multiprocessing
 from typing import List, Tuple
 
 import torch
@@ -124,6 +125,10 @@ def parallel_get_lines(preds, orig_sizes):
     return result
 
 
+def parallel_get_lines_star(args):
+    return parallel_get_lines(*args)
+
+
 def batch_text_detection(images: List, model, processor, batch_size=None) -> List[TextDetectionResult]:
     preds, orig_sizes = batch_detection(images, model, processor, batch_size=batch_size)
     results = []
@@ -133,9 +138,12 @@ def batch_text_detection(images: List, model, processor, batch_size=None) -> Lis
             results.append(result)
     else:
         max_workers = min(settings.DETECTOR_POSTPROCESSING_CPU_WORKERS, len(images))
-        with ProcessPoolExecutor(max_workers=max_workers) as executor:
-            results = list(executor.map(parallel_get_lines, preds, orig_sizes))
+        with multiprocessing.get_context("spawn").Pool(max_workers) as pool:
+            results = list(
+                tqdm(
+                    pool.imap(parallel_get_lines_star, zip(preds, orig_sizes)),
+                    total=len(preds),
+                )
+            )
 
     return results
-
-

@@ -1,7 +1,10 @@
 from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor
+from itertools import repeat
+import multiprocessing
 from typing import List, Optional
 from PIL import Image
+from tqdm import tqdm
 import numpy as np
 
 from surya.detection import batch_detection
@@ -181,6 +184,10 @@ def parallel_get_regions(heatmaps: List[np.ndarray], orig_size, id2label, detect
     return result
 
 
+def parallel_get_regions_star(args):
+    return parallel_get_regions(*args)
+
+
 def batch_layout_detection(images: List, model, processor, detection_results: Optional[List[TextDetectionResult]] = None, batch_size=None) -> List[LayoutResult]:
     preds, orig_sizes = batch_detection(images, model, processor, batch_size=batch_size)
     id2label = model.config.id2label
@@ -191,14 +198,15 @@ def batch_layout_detection(images: List, model, processor, detection_results: Op
             result = parallel_get_regions(preds[i], orig_sizes[i], id2label, detection_results[i] if detection_results else None)
             results.append(result)
     else:
-        futures = []
         max_workers = min(settings.DETECTOR_POSTPROCESSING_CPU_WORKERS, len(images))
-        with ProcessPoolExecutor(max_workers=max_workers) as executor:
-            for i in range(len(images)):
-                future = executor.submit(parallel_get_regions, preds[i], orig_sizes[i], id2label, detection_results[i] if detection_results else None)
-                futures.append(future)
-
-            for future in futures:
-                results.append(future.result())
+        input_args = (
+            zip(preds, orig_sizes, repeat(id2label), detection_results)
+            if detection_results
+            else zip(preds, orig_sizes, repeat(id2label), repeat(None))
+        )
+        with multiprocessing.get_context("spawn").Pool(max_workers) as pool:
+            results = list(
+                tqdm(pool.imap(parallel_get_regions_star, input_args), total=len(preds))
+            )
 
     return results
